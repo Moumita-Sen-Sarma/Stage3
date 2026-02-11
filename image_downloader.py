@@ -21,7 +21,7 @@ def sanitize_filename(url):
     return filename
 
 
-def download_images(keyword, keyword_folder,folder_name, limit=50, api_key="AIzaSyDqlNYYlxReH51VNgvCFCzfkihxhBU0uEs", cse_id="933de8d069a4a4c8e"):
+def download_images(keyword, keyword_folder,folder_name, limit=50, api_key="AIzaSyB7yyx_cv4s1zqhShIpTlF08UPNap7I-6w", cse_id="933de8d069a4a4c8e"):
 # def download_images(keyword, base_folder, neuron_index, solution_name, folder_name, limit=5, api_key="AIzaSyDqlNYYlxReH51VNgvCFCzfkihxhBU0uEs", cse_id="933de8d069a4a4c8e"):
     # keyword_folder = create_folder_structure(base_folder, neuron_index, solution_name, folder_name)
     search_url = "https://www.googleapis.com/customsearch/v1"
