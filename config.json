@@ -1,0 +1,8 @@
+{
+    "source_folder": "/homes/moumita/ecii/ExAI_inputs_and_outputs/Stage1_Results/config_files",
+    "destination_base_folder": "/homes/moumita/ecii/ExAI_inputs_and_outputs/Stage3_Results/Google_images",
+    "model_path": "/homes/moumita/ecii/ExAI_inputs_and_outputs/Stage1_Results/model_INCEPTIONV3_sun10_jul23.h5",
+    "base_output_path": "/homes/moumita/ecii/ExAI_inputs_and_outputs/Stage3_Results"
+}
+
+
