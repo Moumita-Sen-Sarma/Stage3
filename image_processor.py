@@ -37,9 +37,9 @@ def process_and_classify_images(feature_map_model, test_directory, new_classes, 
             image_path = os.path.join(class_directory, image_name)
             try:
                #old code
-               # img = image.load_img(image_path, target_size=(224, 224))
+               img = image.load_img(image_path, target_size=(224, 224))
                #new code
-               img = image.load_img(image_path, target_size=(299, 299))
+               # img = image.load_img(image_path, target_size=(299, 299))
                img = image.img_to_array(img)
                img = np.expand_dims(img, axis=0)
                img = rescale_generator.standardize(img)
