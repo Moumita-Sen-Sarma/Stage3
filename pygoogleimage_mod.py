@@ -1,19 +1,3 @@
-
-"""Drop-in image downloader for the original ECII Stage3 GitHub workflow.
-
-Replaces the old Google HTML parser in pygoogleimage_mod.py with DDGS
-(Bing/DuckDuckGo-based image search; not Google Images).
-
-Import from main.py and call:
-    pi.download(keywords=combined_keywords, limit=100)
-
-Saves JPEGs into images/<combined_keywords>/ for the existing shutil.move()
-step in main.py. Image search results are cached outside images/.
-
-Install dependencies once in the existing virtualenv:
-    python -m pip install ddgs Pillow requests
-"""
-
 from __future__ import annotations
 
 import hashlib
