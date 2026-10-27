@@ -44,11 +44,11 @@ def main(neuron_index):
         combined_keywords = "_and_".join(keywords)
         neuron_solution_folder = os.path.join(destination_base_folder, f'neuron_{neuron_index}', solution)
         os.makedirs(neuron_solution_folder, exist_ok=True)
-        pi.download(keywords=combined_keywords, limit=100)
-        downloaded_images_folder = os.path.join(os.getcwd(), 'images')
-        if os.path.exists(downloaded_images_folder):
-            for filename in os.listdir(downloaded_images_folder):
-                shutil.move(os.path.join(downloaded_images_folder, filename), neuron_solution_folder)
+        # pi.download(keywords=combined_keywords, limit=100)
+        # downloaded_images_folder = os.path.join(os.getcwd(), 'images')
+        # if os.path.exists(downloaded_images_folder):
+        #     for filename in os.listdir(downloaded_images_folder):
+        #         shutil.move(os.path.join(downloaded_images_folder, filename), neuron_solution_folder)
         test_directory = neuron_solution_folder
         new_classes = [combined_keywords]
         process_and_classify_images(feature_map_model, test_directory, new_classes,neuron_index, solution,base_output_path)
