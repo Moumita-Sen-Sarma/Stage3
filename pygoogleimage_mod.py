@@ -12,84 +12,25 @@ import requests
 from PIL import Image, ImageOps, UnidentifiedImageError
 from ddgs import DDGS
 
-MAX_PAGES = 3
-PAGE_RESULTS = 100
 MAX_IMAGE_BYTES = 12 * 1024 * 1024
 MIN_IMAGE_SIZE = 128
+MAX_PAGES = 5
+PAGE_RESULTS = 100
 
 
-def _safe_name(name: str) -> str:
+def _safe_name(name):
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", name.strip())[:180] or "untitled"
 
 
-def _search_query(keyword: str) -> str:
-    return keyword.replace("_and_", " and ").replace("_", " ") + " photograph"
-
-
-def _get_candidates(query: str, cache: Path) -> list[dict]:
-    if cache.exists():
-        with cache.open("r", encoding="utf-8") as fh:
-            cached = json.load(fh)
-        if cached.get("query") == query:
-            print(f"[Images] Reusing {len(cached['results'])} cached search results", flush=True)
-            return cached["results"]
-
-    items = []
-    seen = set()
-    with DDGS(timeout=15) as engine:
-        for page in range(1, MAX_PAGES + 1):
-            try:
-                batch = engine.images(
-                    query=query,
-                    region="us-en",
-                    safesearch="moderate",
-                    type_image="photo",
-                    max_results=PAGE_RESULTS,
-                    page=page,
-                    backend="auto",
-                )
-            except Exception as exc:
-                print(f"[Images] Search failed on page {page}: {exc}", flush=True)
-                break
-            added = 0
-            for item in batch or []:
-                if not isinstance(item, dict):
-                    continue
-                url = item.get("image")
-                if not isinstance(url, str) or not url.startswith(("https://", "http://")):
-                    continue
-                if url in seen:
-                    continue
-                seen.add(url)
-                items.append({
-                    "image": url,
-                    "title": item.get("title", ""),
-                    "source_page": item.get("url", ""),
-                    "source": item.get("source", ""),
-                })
-                added += 1
-            print(f"[Images] Search page {page}: {added} new image URLs", flush=True)
-            if not batch or not added:
-                break
-            time.sleep(2)  # respect the search provider; do not hammer it
-
-    # Cache search URLs so a failed image download does not require new searches.
-    if items:
-        cache.parent.mkdir(parents=True, exist_ok=True)
-        with cache.open("w", encoding="utf-8") as fh:
-            json.dump({"query": query, "results": items}, fh, indent=2)
-    return items
-
-
-def _get_jpeg(session: requests.Session, url: str) -> bytes | None:
+def _get_jpeg(session, url):
     parsed = urlsplit(url)
     if parsed.scheme not in ("http", "https") or not parsed.hostname:
         return None
     try:
-        with session.get(url, timeout=(6, 12), stream=True, allow_redirects=True) as r:
-            r.raise_for_status()
+        with session.get(url, timeout=(6, 12), stream=True, allow_redirects=True) as response:
+            response.raise_for_status()
             raw = bytearray()
-            for chunk in r.iter_content(chunk_size=65536):
+            for chunk in response.iter_content(chunk_size=65536):
                 raw.extend(chunk)
                 if len(raw) > MAX_IMAGE_BYTES:
                     return None
@@ -97,7 +38,6 @@ def _get_jpeg(session: requests.Session, url: str) -> bytes | None:
             if min(original.size) < MIN_IMAGE_SIZE:
                 return None
             img = ImageOps.exif_transpose(original).convert("RGB")
-            # Keep downloads reasonably small while retaining useful resolution.
             img.thumbnail((2000, 2000))
             out = io.BytesIO()
             img.save(out, format="JPEG", quality=88)
@@ -106,80 +46,122 @@ def _get_jpeg(session: requests.Session, url: str) -> bytes | None:
         return None
 
 
-def download(keywords, limit, directory="", extensions=None):
-    """Save up to `limit` usable JPGs per comma-separated keyword query.
+def _verified_jpgs(folder):
+    valid = []
+    for path in sorted(folder.glob("*.jpg")):
+        try:
+            with Image.open(path) as image:
+                image.verify()
+            valid.append(path)
+        except (OSError, ValueError, UnidentifiedImageError):
+            print(f"[Images] Invalid existing file ignored: {path}", flush=True)
+    return valid
 
-    Files: <directory or images>/<keyword>/<keyword>_0001.jpg ...
-    Returns: total number of JPGs present after the operation.
+
+def download(keywords, limit=100, directory="", extensions=None):
+    """Top up one query to EXACTLY `limit` decodable JPG files.
+
+    Downloads directly to directory/<safe-keyword>/. Existing valid JPGs
+    are preserved. On failure, raises RuntimeError rather than quietly
+    returning an incomplete image set.
     """
     limit = int(limit)
     if limit <= 0:
         raise ValueError("limit must be positive")
 
     root = Path(directory or "images")
-    total = 0
-    queries = [k.strip() for k in str(keywords).split(",") if k.strip()]
+    queries = [q.strip() for q in str(keywords).split(",") if q.strip()]
     if not queries:
-        return 0
+        raise ValueError("No search query supplied")
 
+    total = 0
     with requests.Session() as session:
         session.headers.update({"User-Agent": "Mozilla/5.0 (compatible; ECIIResearchImageTest/1.0)"})
         for keyword in queries:
             name = _safe_name(keyword)
             target = root / name
             target.mkdir(parents=True, exist_ok=True)
-            existing = sorted(target.glob("*.jpg"))
-            query = _search_query(keyword)
-            print(f"[Images] Query: {query!r}; requested={limit}; existing={len(existing)}", flush=True)
-
-            if len(existing) >= limit:
-                total += len(existing)
-                print(f"[Images] Already have {len(existing)} images, skipping", flush=True)
+            existing = _verified_jpgs(target)
+            count = len(existing)
+            if count > limit:
+                raise RuntimeError(f"{target} contains {count} valid JPGs; won't delete any to reach {limit}")
+            if count == limit:
+                print(f"[Images] Complete: {target}: {count}/{limit}", flush=True)
+                total += count
                 continue
 
-            # Keep cache separate from the class image folder.
+            hashes = {hashlib.sha256(p.read_bytes()).hexdigest() for p in existing}
             cache = Path(".image_search_cache") / (name + ".json")
-            candidates = _get_candidates(query, cache)
-            hashes = set()
-            for file in existing:
+            seen_urls = set()
+            # Seed from an existing cache if available. Search providers may be
+            # queried again with variations because old results are not enough.
+            cached = []
+            if cache.exists():
                 try:
-                    hashes.add(hashlib.sha256(file.read_bytes()).hexdigest())
-                except OSError:
+                    cached = json.loads(cache.read_text()).get("results", [])
+                except (OSError, ValueError, TypeError):
                     pass
-            count = len(existing)
+
+            base = keyword.replace("_and_", " and ").replace("_", " ")
+            queries_to_try = [base + " photograph", base + " photo", base + " images", base]
             next_id = 1
-            for item in candidates:
-                if count >= limit:
-                    break
-                content = _get_jpeg(session, item["image"])
-                if content is None:
-                    continue
-                digest = hashlib.sha256(content).hexdigest()
-                if digest in hashes:
-                    continue
-                hashes.add(digest)
-                while (target / f"{name}_{next_id:04d}.jpg").exists():
+
+            def consume(items):
+                nonlocal count, next_id
+                for item in items or []:
+                    if count >= limit:
+                        break
+                    url = item.get("image") if isinstance(item, dict) else None
+                    if not isinstance(url, str) or not url.startswith(("http://", "https://")) or url in seen_urls:
+                        continue
+                    seen_urls.add(url)
+                    jpeg = _get_jpeg(session, url)
+                    if jpeg is None:
+                        continue
+                    digest = hashlib.sha256(jpeg).hexdigest()
+                    if digest in hashes:
+                        continue
+                    while (target / f"{name}_{next_id:04d}.jpg").exists():
+                        next_id += 1
+                    path = target / f"{name}_{next_id:04d}.jpg"
+                    path.write_bytes(jpeg)
+                    hashes.add(digest)
+                    count += 1
                     next_id += 1
-                path = target / f"{name}_{next_id:04d}.jpg"
-                path.write_bytes(content)
-                count += 1
-                next_id += 1
-                if count <= 5 or count % 10 == 0 or count == limit:
-                    print(f"[Images] Saved {count}/{limit}: {path.name}", flush=True)
-                time.sleep(0.15)
-            print(f"[Images] Finished {keyword}: {count}/{limit} JPEGs", flush=True)
-            if count < 2:
-                raise RuntimeError(
-                    f"Only {count} images retrieved for {keyword}; "
-                    "Stage3 classification requires at least two."
-                )
+                    if count % 10 == 0 or count == limit:
+                        print(f"[Images] {target}: {count}/{limit}", flush=True)
+                    time.sleep(0.15)
+
+            consume(cached)
             if count < limit:
-                print(
-                    f"[Images] Warning: retrieved {count} of {limit} requested images",
-                    flush=True,
-                )
+                with DDGS(timeout=15) as engine:
+                    for query in queries_to_try:
+                        if count >= limit:
+                            break
+                        for page in range(1, MAX_PAGES + 1):
+                            if count >= limit:
+                                break
+                            try:
+                                batch = engine.images(
+                                    query=query, region="us-en", safesearch="moderate",
+                                    type_image="photo", max_results=PAGE_RESULTS,
+                                    page=page, backend="auto",
+                                )
+                            except Exception as exc:
+                                print(f"[Images] Search error {query!r} page {page}: {exc}", flush=True)
+                                break
+                            if not batch:
+                                break
+                            consume(batch)
+                            time.sleep(2)
+
+            # Fresh count after new files are written.
+            count = len(_verified_jpgs(target))
+            if count != limit:
+                raise RuntimeError(f"Only {count}/{limit} valid JPGs in {target}. Search exhausted; retry later or broaden query.")
             total += count
     return total
+
 
 
 # ------------------old module--------------
