@@ -12,8 +12,8 @@ import shutil
 import sys
 import json
 from keyword_extractor import extract_keywords
-# import pygoogleimage_mod as pi
-from pygoogle_image import image as pi
+import pygoogleimage_mod as pi
+# from pygoogle_image import image as pi
 from image_classification import classify_images_for_solution
 import model as md
 from image_processor import process_and_classify_images
